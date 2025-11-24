@@ -46,12 +46,16 @@ jobs:
         id: apply
         working-directory: ./terraform
         run: terraform apply -auto-approve PLAN
+
+      - name: Refresh Outputs
+        working-directory: ./terraform
+        run: terraform refresh
         
       - name: Set Output
         id: set-ip
         working-directory: ./terraform
         run: |
-          echo "instance_public_ip=$(terraform output -raw instance_public_ip)" >> $GITHUB_OUTPUT
+          echo "instance_public_ip=$(terraform output -raw aws_instance_public_ip)" >> $GITHUB_OUTPUT
           
       - name: Wait for SSH
         run: |

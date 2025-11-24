@@ -76,3 +76,6 @@ Thumbs.db
 # Mac, Linux, Windows temporary files
 *.swp
 *~
+.terraform/*
+.terraform.lock.hcl
+!.terraform.lock.hcl.lockinfo
