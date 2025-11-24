@@ -5,91 +5,115 @@ on:
       - main
 
 env:
-    AWS_REGION: eu-central-1
-    AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-    AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    BUCKET_NAME: ${{ secrets.BUCKET_TF_STATE }}
-    PRIVATE_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PRIVATE }}
-    PUBLIC_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PUBLIC }}
+  AWS_REGION: eu-central-1
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  BUCKET_NAME: ${{ secrets.BUCKET_TF_STATE }}
+  PRIVATE_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PRIVATE }}
+  PUBLIC_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PUBLIC }}
 
 jobs:
-    deploy-infra:
-        runs-on: ubuntu-latest
-        outputs:
-          SERVER_PUBLIC_IP: ${{ steps.apply.outputs.instance_public_ip }}
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v3
-            - name: Setup Terraform
-              uses: hashicorp/setup-terraform@v1
-              with:
-                  terraform_wrapper: false
-            - name: Terraform Init
-              id: init  
-              working-directory: ./terraform
-              run: terraform init -backend-config="bucket=${{ env.BUCKET_NAME }}" -backend-config="region=${{ env.AWS_REGION }}"
-            - name: Terraform Plan
-              id: plan
-              working-directory: ./terraform
-              run: |
-                terraform plan \
-                    -var="aws_region=${{ env.AWS_REGION }}" \
-                    -var="public_key=${{ env.PUBLIC_SSH_KEY }}" \
-                    -var="private_key=${{ env.PRIVATE_SSH_KEY }}" \
-                    -var="key_name=deployer-key" \
-                    -out=PLAN
-            - name: Terraform Apply
-              id: apply
-              working-directory: ./terraform
-              run: terraform apply -auto-approve PLAN
-            - name: set output
-              id: set-ip
-              working-directory: ./terraform
-              run: |
-                echo "::set-output name=instance_public_ip::$(terraform output instance_public_ip)"
+  deploy-infra:
+    runs-on: ubuntu-latest
+    outputs:
+      SERVER_PUBLIC_IP: ${{ steps.set-ip.outputs.instance_public_ip }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+          
+      - name: Terraform Init
+        id: init  
+        working-directory: ./terraform
+        run: terraform init -backend-config="bucket=$BUCKET_NAME" -backend-config="region=$AWS_REGION"
+        
+      - name: Terraform Plan
+        id: plan
+        working-directory: ./terraform
+        run: |
+          terraform plan \
+            -var="aws_region=$AWS_REGION" \
+            -var="public_key=$PUBLIC_SSH_KEY" \
+            -var="private_key=$PRIVATE_SSH_KEY" \
+            -var="key_name=deployer-key" \
+            -out=PLAN
+            
+      - name: Terraform Apply
+        id: apply
+        working-directory: ./terraform
+        run: terraform apply -auto-approve PLAN
+        
+      - name: Set Output
+        id: set-ip
+        working-directory: ./terraform
+        run: |
+          echo "instance_public_ip=$(terraform output -raw instance_public_ip)" >> $GITHUB_OUTPUT
+          
+      - name: Wait for SSH
+        run: |
+          for i in {1..30}; do
+            nc -zv ${{ steps.set-ip.outputs.instance_public_ip }} 22 && break
+            echo "Waiting for SSH..."
+            sleep 10
+          done
 
-    deploy-app:
-        runs-on: ubuntu-latest
-        needs: deploy-infra
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v3
-            - name: set IP env variable
-              run: echo "SERVER_PUBLIC_IP=${{ needs.deploy-infra.outputs.SERVER_PUBLIC_IP }}" >> $GITHUB_ENV
-            - name: Login AWS ECR
-              id: login-ecr
-              uses: aws-actions/amazon-ecr-login@v1
-            - name: Build, Tag, and Push Docker image to Amazon ECR
-              env:
-                  ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-                  ECR_REPOSITORY: example-nodeapp
-                  IMAGE_TAG: ${{ github.sha }}
-                run: |
-                  docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .  
-                  docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-                working-directory: ./nodeapp
-                
-            - name: Deploy to EC2 Instance
-              env:
-                 ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-                 ECR_REPOSITORY: example-nodeapp
-                 IMAGE_TAG: ${{ github.sha }}
-                 AWS_DEFAULT_REGION: eu-central-1
-              uses: appleboy/ssh-action@master
-              with:
-                  host: ${{ env.SERVER_PUBLIC_IP }}
-                  username: ubuntu
-                  key: ${{ env.PRIVATE_SSH_KEY }}
-                  envs: ECR_REGISTRY,ECR_REPOSITORY,IMAGE_TAG,AWS_DEFAULT_REGION,PRIVATE_SSH_KEY,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_REGION
-                  script: |
-                    sudo apt-get update
-                    sudo apt-get install docker.io -y 
-                    sudo apt install aws-cli -y
-                    sudo $(aws ecr get-login --no-include-email --region eu-central-1); 
-                    sudo docker stop myappcontainer || true
-                    sudo docker rm myappcontainer || true
-                    sudo docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-                    sudo docker run -d --name myappcontainer -p 80:8080 $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-                    sudo systemctl enable docker
-
-   
+  deploy-app:
+    runs-on: ubuntu-latest
+    needs: deploy-infra
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Login AWS ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        
+      - name: Build, Tag, and Push Docker Image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: example-nodeapp
+          IMAGE_TAG: ${{ github.sha }}
+        working-directory: ./nodeapp
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .  
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          
+      - name: Deploy to EC2
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: example-nodeapp
+          IMAGE_TAG: ${{ github.sha }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ needs.deploy-infra.outputs.SERVER_PUBLIC_IP }}
+          username: ubuntu
+          key: ${{ secrets.AWS_SSH_KEY_PRIVATE }}
+          envs: ECR_REGISTRY,ECR_REPOSITORY,IMAGE_TAG,AWS_REGION
+          script: |
+            set -e
+            
+            # Install dependencies if not present
+            if ! command -v docker &> /dev/null; then
+              sudo apt-get update
+              sudo apt-get install -y docker.io aws-cli
+              sudo systemctl enable docker
+              sudo systemctl start docker
+            fi
+            
+            # ECR login with new syntax
+            aws ecr get-login-password --region $AWS_REGION | \
+              sudo docker login --username AWS --password-stdin $ECR_REGISTRY
+            
+            # Stop and remove old container
+            sudo docker stop myappcontainer 2>/dev/null || true
+            sudo docker rm myappcontainer 2>/dev/null || true
+            
+            # Pull and run new container
+            sudo docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+            sudo docker run -d --name myappcontainer -p 80:8080 \
+              --restart unless-stopped \
+              $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
