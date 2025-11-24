@@ -1,6 +1,6 @@
 resource "aws_instance" "server" {
-  ami                    = "ami-03b7a7ce915b46b75"
-  instance_type          = "t2.micro"
+  ami                    = "ami-0a854fe96e0b45e4e"
+  instance_type          = "t3.small"
   key_name               = aws_key_pair.deployer.key_name
   vpc_security_group_ids = [aws_security_group.maingroup.id]
   iam_instance_profile   = aws_iam_instance_profile.ec2-profile.name
