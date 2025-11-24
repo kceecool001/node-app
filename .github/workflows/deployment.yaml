@@ -1,0 +1,42 @@
+name: CICD with Terraform and AWS
+on:
+  push:
+    branches:
+      - main
+
+env:
+    AWS_REGION: eu-central-1
+    AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+    AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    BUCKET_NAME: ${{ secrets.BUCKET_TF_STATE }}
+    PRIVATE_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PRIVATE }}
+    PUBLIC_SSH_KEY: ${{ secrets.AWS_SSH_KEY_PUBLIC }}
+
+jobs:
+    deploy-infra:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v3
+            - name: Setup Terraform
+              uses: hashicorp/setup-terraform@v1
+              with:
+                  terraform_wrapper: false
+            - name: Terraform Init
+              id: init  
+              working-directory: ./terraform
+              run: terraform init -backend-config="bucket=${{ env.BUCKET_NAME }}" -backend-config="region=${{ env.AWS_REGION }}"
+            - name: Terraform Plan
+              id: plan
+              working-directory: ./terraform
+              run: |
+                terraform plan \
+                -var="aws_region=${{ env.AWS_REGION }}" \
+                -var="public_key=${{ env.PUBLIC_SSH_KEY }}"\
+                -var="private_key=${{ env.PRIVATE_SSH_KEY }}"
+                -var="key_name=deployer-key"
+                -out=PLAN
+            - name: Terraform Apply
+              id: apply
+              working-directory: ./terraform
+              run: terraform apply -auto-approve PLAN
