@@ -1,5 +1,5 @@
 resource "aws_instance" "server" {
-  ami                    = "ami-0d2c380199f9897f1"
+  ami                    = "ami-03b7a7ce915b46b75"
   instance_type          = "t2.micro"
   key_name               = aws_key_pair.deployer.key_name
   vpc_security_group_ids = [aws_security_group.maingroup.id]
