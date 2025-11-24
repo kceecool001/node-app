@@ -46,10 +46,6 @@ jobs:
         id: apply
         working-directory: ./terraform
         run: terraform apply -auto-approve PLAN
-
-      - name: Refresh Outputs
-        working-directory: ./terraform
-        run: terraform refresh
         
       - name: Set Output
         id: set-ip
